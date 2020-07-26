@@ -1,0 +1,18 @@
+{
+	"type": "record",
+	"namespace": "com.data.dataeng.challenge",
+	"name": "movie_ratings_count",
+	"fields": [{
+			"name": "NAME",
+			"type": "string"
+		},
+		{
+			"name": "RATING",
+			"type": "float"
+		},
+		{
+			"name": "COUNT",
+			"type": "long"
+		}
+	]
+}

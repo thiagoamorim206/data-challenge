@@ -1,0 +1,14 @@
+{
+	"type": "record",
+	"namespace": "com.data.dataeng.challenge",
+	"name": "genre_count",
+	"fields": [{
+			"name": "NAME",
+			"type": "string"
+		},
+		{
+			"name": "COUNT",
+			"type": "long"
+		}
+	]
+}
