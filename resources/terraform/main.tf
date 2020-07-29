@@ -5,24 +5,24 @@ provider "google" {
 }
 
 resource "google_storage_bucket" "dataflow" {
-  name = "iccde-dataflow"
+  name = var.bucket-iccde-dataflow
 }
 
 resource "google_storage_bucket" "datalake" {
-  name = "iccde-datalake"
+  name = var.bucket-iccde-datalake
 }
 
 resource "google_storage_bucket" "analytics" {
-  name = "iccde-analytics"
+  name = var.bucket-iccde-analytics
 }
 
 resource "google_bigquery_dataset" "dataset" {
-  dataset_id = "iccde"
+  dataset_id = var.bigquery-dataset
 }
 
 resource "google_bigquery_table" "default" {
   dataset_id = google_bigquery_dataset.dataset.dataset_id
-  table_id = "genre_count"
+  table_id = var.bigquery-table
   schema = <<EOF
 [
   {

@@ -1,6 +1,9 @@
 # Default ignored files
 /workspace.xml
 .idea/
-
 resources/account-key/
 resources/terraform/.terraform/
+resources/terraform/terraform.tfstate
+resources/terraform/terraform.tfstate.backup
+java/java.iml
+java/target/
