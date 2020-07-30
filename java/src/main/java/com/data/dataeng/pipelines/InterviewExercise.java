@@ -1,5 +1,6 @@
 package com.data.dataeng.pipelines;
 
+import com.data.dataeng.enums.GenreCount;
 import com.data.dataeng.json.Genre;
 import com.data.dataeng.options.IngestionOptions;
 import com.google.api.services.bigquery.model.TableFieldSchema;
@@ -26,7 +27,6 @@ public class InterviewExercise {
     public static void main(String[] args) {
         PipelineOptionsFactory.register(IngestionOptions.class);
         IngestionOptions options = PipelineOptionsFactory.fromArgs(args).withValidation().as(IngestionOptions.class);
-        options.setTempLocation("gs://iccde-dataflow");
         runIngestion(options);
     }
 
@@ -52,7 +52,7 @@ public class InterviewExercise {
         }));
 
         //Write JSON to Google Cloud Storage
-        json.apply(TextIO.write().to("gs://iccde-analytics/movies.json"));
+        json.apply(TextIO.write().to("gs://iccde-analytics/genres_count/movies.json"));
 
         // Parse to BigQuery row
         final PCollection<TableRow> bq = genresCount.apply(ParDo.of(new DoFn<KV<String, Long>, TableRow>() {
@@ -60,16 +60,16 @@ public class InterviewExercise {
             public void processElement(ProcessContext context) {
                 KV<String, Long> element = context.element();
                 TableRow tableRow = new TableRow();
-                tableRow.set("name", element.getKey());
-                tableRow.set("count", element.getValue());
+                tableRow.set(GenreCount.NAME.name(), element.getKey());
+                tableRow.set(GenreCount.COUNT.name(), element.getValue());
                 context.output(tableRow);
             }
         }));
 
         // Write rows to BigQuery (WriteDiposition.WRITE_TRUNCATE e CreateDisposition.CREATE_NEVER)
         List<TableFieldSchema> fields = new ArrayList<>();
-        fields.add(new TableFieldSchema().setName("name").setType("STRING"));
-        fields.add(new TableFieldSchema().setName("count").setType("INTEGER"));
+        fields.add(new TableFieldSchema().setName(GenreCount.NAME.name()).setType("STRING"));
+        fields.add(new TableFieldSchema().setName(GenreCount.COUNT.name()).setType("INTEGER"));
         TableSchema schema = new TableSchema().setFields(fields);
 
         bq.apply(BigQueryIO.writeTableRows()
@@ -78,19 +78,7 @@ public class InterviewExercise {
                 .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_TRUNCATE)
                 .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_NEVER));
 
-
-        /* Read movies.csv from storage
-         Get movie genres string using regex "([A-Za-z|-]+$)|(no genres listed)"
-         Split movies genres by delimiter
-         Count genres
-         Parse to JSON
-         Write JSON to Google Cloud Storage
-         Parse to BigQuery rows
-         Write rows to BigQuery (WriteDiposition.WRITE_TRUNCATE e CreateDisposition.CREATE_NEVER)*/
-
-        System.out.println("About to run!");
         p.run().waitUntilFinish();
-        System.out.println("Run complete!");
 
     }
 }
