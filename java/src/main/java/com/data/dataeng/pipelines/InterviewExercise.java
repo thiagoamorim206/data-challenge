@@ -33,13 +33,20 @@ public class InterviewExercise {
     private static void runIngestion(IngestionOptions options) {
         Pipeline p = Pipeline.create(options);
 
-        final PCollection<KV<String, Long>> genresCount = p.apply(TextIO.read().from("gs://iccde-datalake/movies.csv"))
-                .apply(Regex.find("([A-Za-z|-]+$)|(no genres listed)"))
-                .apply(Regex.split("[=|]"))
-                .apply(Count.perElement());
+        // Read movies.csv from storage
+        PCollection<String> readFile = p.apply(TextIO.read().from("gs://iccde-datalake/movies.csv"));
+
+        // Get movie genres string using regex "([A-Za-z|-]+$)|(no genres listed)"
+        PCollection<String> findGenres = readFile.apply(Regex.find("([A-Za-z|-]+$)|(no genres listed)"));
+
+        // Split movies genres by delimiter
+        PCollection<String> splitGenres = findGenres.apply(Regex.split("[=|]"));
+
+        // Count genres
+        PCollection<KV<String, Long>> genresCount = splitGenres.apply(Count.perElement());
 
         // Parse to Json
-        final PCollection<String> json = genresCount.apply(ParDo.of(new DoFn<KV<String, Long>, String>() {
+        PCollection<String> json = genresCount.apply("ParseToJson", ParDo.of(new DoFn<KV<String, Long>, String>() {
             @ProcessElement
             public void processElement(ProcessContext context) {
                 KV<String, Long> element = context.element();
@@ -51,11 +58,11 @@ public class InterviewExercise {
             }
         }));
 
-        //Write JSON to Google Cloud Storage
+        // Write JSON to Google Cloud Storage
         json.apply(TextIO.write().to("gs://iccde-analytics/genres_count/movies.json"));
 
         // Parse to BigQuery row
-        final PCollection<TableRow> bq = genresCount.apply(ParDo.of(new DoFn<KV<String, Long>, TableRow>() {
+        PCollection<TableRow> bqRow = genresCount.apply("ParseToRowBigQuery", ParDo.of(new DoFn<KV<String, Long>, TableRow>() {
             @ProcessElement
             public void processElement(ProcessContext context) {
                 KV<String, Long> element = context.element();
@@ -66,13 +73,13 @@ public class InterviewExercise {
             }
         }));
 
-        // Write rows to BigQuery (WriteDiposition.WRITE_TRUNCATE e CreateDisposition.CREATE_NEVER)
+        // Write rows to BigQuery
         List<TableFieldSchema> fields = new ArrayList<>();
         fields.add(new TableFieldSchema().setName(GenreCount.NAME.name()).setType("STRING"));
         fields.add(new TableFieldSchema().setName(GenreCount.COUNT.name()).setType("INTEGER"));
         TableSchema schema = new TableSchema().setFields(fields);
 
-        bq.apply(BigQueryIO.writeTableRows()
+        bqRow.apply(BigQueryIO.writeTableRows()
                 .to("data-challenge-2020:iccde.genre_count")
                 .withSchema(schema)
                 .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_TRUNCATE)

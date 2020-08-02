@@ -1,100 +1,160 @@
 # Desafio - Engenharia de Dados
 
-O desafio consiste em criar um pipeline de processamento de dados e a 
-automação de criação dos recursos de infraestrutura.
+O desafio consiste em criar um pipeline de processamento de dados e a automação de criação dos recursos de 
+infraestrutura.
 
-## Entrega
-Você terá 7 dias a partir do recebimento deste email para fazer a 
-entrega final via github. Durante todo o período estarei disponível para 
-dúvidas, o foco do teste é descobrir como você lida com aprender 
-tecnologias que nunca viu antes para fazer uma entrega. Caso não consiga 
-terminar 100% do proposto, recomendo que faça as entregas mesmo assim 
-para que possamos avaliar seu desempenho.
+## Entrega do Desafio
 
-### Arquivos
-Os datasets para testes e schemas Avro estão no diretório resources. 
+Foi desenvolvido um pipeline de processamento de dados utilizando linguagem Java e a automação de criação dos 
+recursos de infraestrutura com o Terraform, Shellscript e o Google Cloud SDK.
 
-Os arquivos CSV fazem parte de um dataset público chamado MovieLens.
-Para intuito de testes a versão incluída neste pacote é a small. Após 
-a conclusão do desenvolvimento você pode baixar a versão completa 
-(cerca de 265MB) e realizar os processamentos novamente.
+## Amostra dos dados de entrada
 
-https://grouplens.org/datasets/movielens/latest/
+![alt text](resources/images/entrada_dados.png "Amostra dos dados de entrada")
 
-### Requisitos
-* Conta na Google Cloud Platform
-* Google Cloud SDK
-* Terraform > v0.12
-* Java 8/Maven 3
-* Python 3.7/Pip
+## Amostra dos resultados no BigQuery
 
-## Pipeline
-Utilizando o Apache Beam, deverá ser criado um pipeline de processamento
-que lerá de um bucket do Storage o arquivo movies.csv, realizar todos os 
-parses necessários para obtermos uma contagem de ocorrências de cada 
-gênero de filmes.
+![alt text](resources/images/result.png "Resultado no BigQuery")
 
-O resultado final deve ser gravado em uma tabela no BigQuery chamada
-genre_count e no Storage em formato JSON.
+## Amostra dos resultados no Storage no formato Json
 
-O pipeline pode ser codificado em Python ou Java 
-(melhor ainda nas duas).
+![alt text](resources/images/result_json.png "Resultado no Storage no formato Json")
 
-### Desenho da solução:
+## Construção do Pipeline
 
-![alt text](resources/images/must_have.png "Desenho da solução")
+A solução deste desafio para a criação do pipeline consiste nas seguintes fases.
 
-### Exemplo de resultado no BigQuery
+- Ler o arquivo de dados contido na Cloud Storage no Bucket iccde-datalake:
 
-![alt text](resources/images/genre_count_result.png "Resultado no BigQuery")
+        Pipeline p = Pipeline.create(options);
+        PCollection<String> readFile = p.apply(TextIO.read().from("gs://iccde-datalake/movies.csv"));
 
+- Buscar apenas os nomes dos gêneros de filmes por uma Regex:
 
-## Automação
+        PCollection<String> findGenres = readFile.apply(Regex.find("([A-Za-z|-]+$)|(no genres listed)"));
 
-Utilizando o Terraform/Shellscript/Google Cloud SDK, deverão ser criados 
-todos os scripts de provisionamento dos recursos necessários para a 
-execução do projeto. São eles:
+- Realizar um split por um delimitador ("|"):
 
-* Storage (Terraform)
-  * iccde-dataflow
-  * iccde-datalake
-  * iccde-analytics
-  * iccde-schemas (bônus)
-* BigQuery (Terraform)
-  * Dataset iccde
-  * Tabela genre_count
-    * NAME: STRING
-    * COUNT: INTEGER
-  * Tabela movie_ratings_count (bônus)
-    * NAME: STRING
-    * RATING: FLOAT
-    * COUNT: INTEGER
-* Mover Arquivos (Shellscript/Google Cloud SDK)
-  * CSV
-    * Bucket iccde-datalake
-  * Avro Schemas (bônus)
-    * Bucket iccde-schemas
-    
-## Bônus
+        PCollection<String> splitGenres = findGenres.apply(Regex.split("[=|]"));
 
-Existem dois cenários bônus que, em caso de tempo, podem ser adicionados
-ao pipeline original.
+- Neste ponto os dados estão prontos para contagem dos gêneros de filmes. É efetuada uma contagem dos 
+dados por elemento, gerando uma nova coleção de dados com chave e valor, sendo a chave o nome do gênero 
+e o valor a quantidade de vezes que este gênero se repete:
 
-O bônus 01 consiste em realizar a contagem de ratings de cada um dos 
-filmes e a gravação no Storage/BigQuery.
+        PCollection<KV<String, Long>> genresCount = splitGenres.apply(Count.perElement());
 
-O bônus 02 consiste em adicionar a validação dos registros gerados em 
-um Avro Schema e a gravação no Storage de arquivos nos formatos Avro e 
-Parquet (além do JSON).
+- Transformar a coleção chave e valor em formato Json:
 
+        PCollection<String> json = genresCount.apply("ParseToJson", ParDo.of(new DoFn<KV<String, Long>, String>() {
+            @ProcessElement
+            public void processElement(ProcessContext context) {
+                KV<String, Long> element = context.element();
+                try {
+                    context.output(new ObjectMapper().writeValueAsString(new Genre(element.getKey(), element.getValue())));
+                } catch (IOException ioException) {
+                    ioException.printStackTrace();
+                }
+            }
+        }));
+        
+- Gravar o Json no Cloud Storage no Bucket iccde-analytics:
 
-![alt text](resources/images/bonus.png "Bônus 01 e 02")
+        json.apply(TextIO.write().to("gs://iccde-analytics/genres_count/movies.json"));
 
+- Transformar a coleção chave e valor no formato de linhas do BigQuery:
 
-## Bônus Ops
+        PCollection<TableRow> bqRow = genresCount.apply("ParseToRowBigQuery", ParDo.of(new DoFn<KV<String, Long>, TableRow>() {
+            @ProcessElement
+            public void processElement(ProcessContext context) {
+                KV<String, Long> element = context.element();
+                TableRow tableRow = new TableRow();
+                tableRow.set(GenreCount.NAME.name(), element.getKey());
+                tableRow.set(GenreCount.COUNT.name(), element.getValue());
+                context.output(tableRow);
+            }
+        }));
 
-O terraform que subir infraestrutura do pipelines, deve funcionar de forma modularizado e 
-tambem que tenha facilidade de executar destroy nos dataflow sem impactar o Storage e Bigquery,
-na execução do script, ele tem que executar usando credenciais default e não service account.
+- Gravar linhas no dataset iccde na tabela genre_count do BigQuery:
 
-https://cloud.google.com/sdk/gcloud/reference/auth/application-default/login
+        List<TableFieldSchema> fields = new ArrayList<>();
+        fields.add(new TableFieldSchema().setName(GenreCount.NAME.name()).setType("STRING"));
+        fields.add(new TableFieldSchema().setName(GenreCount.COUNT.name()).setType("INTEGER"));
+        TableSchema schema = new TableSchema().setFields(fields);
+        
+        bqRow.apply(BigQueryIO.writeTableRows()
+                .to("data-challenge-2020:iccde.genre_count")
+                .withSchema(schema)
+                .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_TRUNCATE)
+                .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_NEVER));
+        
+        p.run().waitUntilFinish();
+
+#### Data Flow
+
+![alt text](resources/images/data_flow.png "Data Flow")
+
+#### Argumentos para execução Java no DataFlow:
+
+--project=data-challenge-2020 
+--tempLocation=gs://iccde-dataflow/temp/ 
+--stagingLocation=gs://iccde-dataflow/staging/ 
+--runner=DataflowRunner 
+
+## Construção da Automação
+
+#### Terraform
+
+A estrutura dos arquivos:
+
+main.tf (Arquivo de criação dos recursos de infraestrutura)
+variables.tf (Arquivo de variáveis)
+
+- Criação dos Storages:
+
+        resource "google_storage_bucket" "dataflow" {
+          name = var.bucket-iccde-dataflow
+        }
+        
+        resource "google_storage_bucket" "datalake" {
+          name = var.bucket-iccde-datalake
+        }
+        
+        resource "google_storage_bucket" "analytics" {
+          name = var.bucket-iccde-analytics
+        }
+
+- Criação do dataset no BigQuery:
+
+        resource "google_bigquery_dataset" "dataset" {
+          dataset_id = var.bigquery-dataset
+        }
+
+- Criação da tabela no BigQuery com schema:
+
+        resource "google_bigquery_table" "default" {
+          dataset_id = google_bigquery_dataset.dataset.dataset_id
+          table_id = var.bigquery-table
+          schema = <<EOF
+        [
+          {
+            "name": "NAME",
+            "type": "STRING",
+            "mode": "NULLABLE",
+            "description": "Movie genres"
+          },
+          {
+            "name": "COUNT",
+            "type": "INTEGER",
+            "mode": "NULLABLE",
+            "description": "Counting genres of films"
+          }
+        ]
+        EOF
+        }
+
+#### Shell Script e Google Cloud SDK
+
+Comando para efetuar a cópia do arquivo de entrada dos dados (movies.csv) para dentro do Cloud Storage no Bucket iccde-datalake.
+
+        output=$(gsutil cp ../datasets/movies.csv gs://iccde-datalake)
+        echo $output
